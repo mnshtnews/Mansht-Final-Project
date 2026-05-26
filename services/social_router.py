@@ -1,27 +1,4 @@
-"""
-Smart social-media routing engine.
 
-Strategy
-────────
-Priority score thresholds (from settings.py):
-  ≥ 9  → INSTAGRAM immediately  +  Twitter queue  +  Facebook within 5 min
-  ≥ 1  → Twitter queue  +  Facebook if important enough
-  = 0  → Twitter queue only (low volume content)
-
-Burst handling:
-  If BURST_MAX_INSTANT posts have already been sent to a platform within
-  BURST_WINDOW_SECONDS, additional posts are deferred to that platform's
-  normal queue (not dropped — just slightly delayed).
-
-Rate enforcement:
-  Each platform has a minimum inter-post interval and an hourly cap,
-  tracked in the social_rate_log table.
-
-Facebook 5-minute rule:
-  High-priority articles (score >= PRIORITY_THRESHOLD_FACEBOOK) must appear
-  on Facebook within 5 minutes of website publication.
-  The publisher checks the age of the article and fast-tracks if needed.
-"""
 from __future__ import annotations
 
 import logging
@@ -45,12 +22,8 @@ from config.settings import (
 
 logger = logging.getLogger(__name__)
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Rate helpers
-# ─────────────────────────────────────────────────────────────────────────────
 
 def _seconds_since_last(platform: str) -> float:
-    """Seconds elapsed since the most recent post on this platform."""
     row = db_execute(
         "SELECT sent_at FROM social_rate_log WHERE platform=%s ORDER BY sent_at DESC LIMIT 1",
         (platform,), fetch=True,
@@ -87,10 +60,7 @@ def _posts_in_burst_window(platform: str) -> int:
 
 
 def _can_post(platform: str) -> tuple[bool, str]:
-    """
-    Returns (allowed: bool, reason: str).
-    reason is empty string when allowed.
-    """
+
     min_interval = {
         "instagram": INSTAGRAM_MIN_INTERVAL_SECONDS,
         "twitter":   TWITTER_MIN_INTERVAL_SECONDS,
@@ -125,9 +95,6 @@ def _log_post(platform: str, article_id: int, queue_id: int) -> None:
     )
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Public routing interface
-# ─────────────────────────────────────────────────────────────────────────────
 
 def route_to_platforms(
     post: dict,
@@ -136,23 +103,17 @@ def route_to_platforms(
     twitter_publisher=None,
     facebook_publisher=None,
 ) -> dict[str, str]:
-    """
-    Decide which platforms to post to right now vs defer, then send.
 
-    Returns dict: { platform: 'sent'|'deferred'|'skipped'|'failed' }
-    """
     priority_score = post.get("priority_score", 0)
     article_id     = post.get("article_id", 0)
     queue_id       = post.get("id", 0)
     title          = post.get("title", "")[:60]
 
-    # Article age in seconds
     created_at = post.get("created_at")
     age_seconds = (time.time() - float(created_at)) if created_at else 9999
 
     statuses: dict[str, str] = {}
 
-    # ── Instagram: only high priority ────────────────────────────────────
     if priority_score >= PRIORITY_THRESHOLD_INSTAGRAM and instagram_publisher:
         allowed, reason = _can_post("instagram")
         if allowed:
@@ -170,7 +131,6 @@ def route_to_platforms(
     else:
         statuses["instagram"] = "skipped"
 
-    # ── Twitter: medium + high priority ───────────────────────────────────
     if priority_score >= PRIORITY_THRESHOLD_TWITTER and twitter_publisher:
         allowed, reason = _can_post("twitter")
         if allowed:
@@ -188,10 +148,9 @@ def route_to_platforms(
     else:
         statuses["twitter"] = "skipped"
 
-    # ── Facebook: high priority + within 5 min window ────────────────────
     send_fb = (
         priority_score >= PRIORITY_THRESHOLD_FACEBOOK
-        or age_seconds <= 300  # force-send if article ≤ 5 min old + high priority
+        or age_seconds <= 300  
     ) and priority_score >= PRIORITY_THRESHOLD_FACEBOOK
 
     if send_fb and facebook_publisher:

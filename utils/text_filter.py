@@ -51,7 +51,6 @@ REPLACEMENTS = {
 }
 
 
-# بيشيل بس الـ invisible/control chars — مش بيمس الحروف العربية
 _INVISIBLE_CHARS = re.compile(
     r'[\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff\u00ad\u061c]'
 )

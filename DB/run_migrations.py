@@ -1,4 +1,3 @@
-"""Run migrations.sql against the configured DATABASE_URL."""
 import os
 import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -13,7 +12,6 @@ cur  = conn.cursor()
 with open(MIGRATIONS_FILE, "r", encoding="utf-8") as f:
     sql = f.read()
 
-# Execute statement by statement, skip empty/comment-only blocks
 import re
 statements = [s.strip() for s in sql.split(";") if s.strip() and not s.strip().startswith("--")]
 errors = 0

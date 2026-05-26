@@ -1,9 +1,4 @@
-"""
-Recalculation worker — periodically refreshes aging scores and reorders
-the queue so that older articles get a priority boost over time.
 
-Runs in a daemon thread every 60 seconds.
-"""
 from __future__ import annotations
 
 import time

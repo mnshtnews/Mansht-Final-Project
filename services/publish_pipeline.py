@@ -1,55 +1,4 @@
-"""
-services/publish_pipeline.py — Unified, Idempotent Publish Orchestration Layer
 
-PROBLEM THIS MODULE SOLVES
-────────────────────────────────────────────────────────────────────────────
-The original system had TWO separate publish paths:
-
-  Path A (instant): save_news → instant_publish → social_dispatcher
-  Path B (queue):   save_news → QueueManager → scheduler → social_dispatcher
-
-This fragmentation caused:
-  1. DUPLICATE WEBHOOKS — an article published instantly via Path A could
-     also be picked up by the scheduler (Path B) if status wasn't updated
-     atomically, sending the same article to Make.com twice.
-  2. NO IDEMPOTENCY — retries had no fingerprint check; the same webhook
-     payload could be sent multiple times with no detection.
-  3. NON-PERSISTENT DELAYED JOBS — threading.Thread delays in social_dispatcher
-     are lost on process restart, silently dropping queued posts.
-  4. FRAGMENTED TRACING — no single place shows the complete lifecycle of
-     one article across all platforms.
-
-SOLUTION
-────────────────────────────────────────────────────────────────────────────
-PublishPipeline is the SINGLE entry point for all article publishing.
-Both instant (high-priority) and normal-priority articles flow through here.
-
-Key guarantees:
-  1. Idempotency: each (article_id, platform) pair is fingerprinted.
-     Duplicate calls are detected and blocked at DB level.
-  2. Single status authority: the news_queue row is the single source
-     of truth.  No publish call happens without first claiming the row.
-  3. Centralized payload builder: all three webhooks receive consistent,
-     sanitized payloads built from the same function.
-  4. Structured tracing: every decision (sent / skipped / failed) is
-     logged with article_id, platform, score, and timestamp.
-  5. Persistent retry: failed platforms are not silently dropped; they
-     are re-queued as 'pending' so the scheduler retries them.
-
-PUBLISHING STRATEGY (from Task 2)
-────────────────────────────────────────────────────────────────────────────
-HIGH PRIORITY (priority_score ≥ PRIORITY_THRESHOLD_INSTAGRAM):
-  → Telegram (always first, fastest)
-  → Instagram ONLY
-  → Facebook:  SKIPPED (policy)
-  → Twitter:   SKIPPED (policy)
-
-NORMAL PRIORITY:
-  → Telegram (always)
-  → Facebook  (if ENABLE_FACEBOOK_POSTING and within date window)
-  → Twitter
-  → Instagram: SKIPPED
-"""
 from __future__ import annotations
 
 import hashlib
@@ -85,25 +34,15 @@ from DB.db import db_execute
 from utils.text_filter import sanitize_text
 from utils.logger import logger
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Publish event fingerprinting
-# ─────────────────────────────────────────────────────────────────────────────
 
 def _event_fingerprint(article_id: int, platform: str) -> str:
-    """
-    Create a deterministic fingerprint for (article_id, platform).
-    Used to detect and block duplicate publish events.
-    """
+ 
     raw = f"{article_id}:{platform}"
     return hashlib.sha256(raw.encode()).hexdigest()[:16]
 
 
 def _is_already_published(article_id: Optional[int], platform: str) -> bool:
-    """
-    Check publish_log table for a prior successful publish of this
-    (article_id, platform) pair.  Blocks duplicates at DB level.
-    Returns False (allow publish) when article_id is None — can't fingerprint.
-    """
+
     if article_id is None:
         return False
     try:
@@ -118,7 +57,7 @@ def _is_already_published(article_id: Optional[int], platform: str) -> bool:
         )
         return bool(row)
     except Exception:
-        return False   # fail-open: if we can't check, try to publish
+        return False   
 
 
 def _record_publish_event(
@@ -128,9 +67,7 @@ def _record_publish_event(
     status: str,
     error_msg: Optional[str] = None,
 ) -> None:
-    """Persist a publish event to the log for idempotency + audit trail.
-    No-ops silently when article_id is None — cannot fingerprint without it.
-    """
+
     if article_id is None:
         return
     try:
@@ -157,15 +94,9 @@ def _record_publish_event(
         logger.warning(f"Publish log write failed for {platform}/{article_id}: {exc}")
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Centralized payload builder
-# ─────────────────────────────────────────────────────────────────────────────
 
 def _build_payload(post: dict, platform: str) -> dict:
-    """
-    Build a consistent, sanitized webhook payload for any platform.
-    All platform publishers use this — ensures no inconsistency.
-    """
+
     title      = sanitize_text(post.get("title", ""))
     content    = sanitize_text((post.get("content") or "")[:500])
     url        = post.get("url", "")
@@ -203,15 +134,9 @@ def _build_payload(post: dict, platform: str) -> dict:
     raise ValueError(f"Unknown platform: {platform!r}")
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Rate limiter (DB-backed, no in-memory state = process-restart safe)
-# ─────────────────────────────────────────────────────────────────────────────
 
 def _can_post_now(platform: str) -> tuple[bool, str]:
-    """
-    Returns (allowed, reason).  reason is '' when allowed.
-    All state lives in social_rate_log — survives process restarts.
-    """
+
     cfg = {
         "instagram": (INSTAGRAM_MIN_INTERVAL_SECONDS, INSTAGRAM_MAX_PER_HOUR),
         "twitter":   (TWITTER_MIN_INTERVAL_SECONDS,   TWITTER_MAX_PER_HOUR),
@@ -223,7 +148,7 @@ def _can_post_now(platform: str) -> tuple[bool, str]:
 
     min_interval, max_per_hour = cfg
 
-    # Check cooldown
+
     try:
         row = db_execute(
             """
@@ -276,9 +201,6 @@ def _record_rate_event(
         logger.warning(f"Rate log write failed: {exc}")
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Webhook sender with retry
-# ─────────────────────────────────────────────────────────────────────────────
 
 def _get_webhook_url(platform: str) -> Optional[str]:
     env_map = {
@@ -311,23 +233,20 @@ def _publish_to_platform(
     post: dict,
     platform: str,
 ) -> str:
-    """
-    Send to one platform.  Returns status string:
-      'sent' | 'failed' | 'skipped:reason' | 'rate_limited'
-    """
-    # Resolve article_id — prefer article_id field, fall back to queue id
+
+
     _raw_id    = post.get("article_id") or post.get("id")
     article_id: Optional[int] = int(_raw_id) if _raw_id is not None else None
     queue_id   = post.get("id")
 
-    # Idempotency check
+
     if _is_already_published(article_id, platform):
         logger.debug(
             f"⏭  Idempotency block | {platform} | article_id={article_id}"
         )
         return "skipped:already_published"
 
-    # Rate limit check
+
     allowed, reason = _can_post_now(platform)
     if not allowed:
         logger.info(
@@ -335,7 +254,7 @@ def _publish_to_platform(
         )
         return f"rate_limited:{reason}"
 
-    # Facebook date window
+
     if platform == "facebook":
         if not ENABLE_FACEBOOK_POSTING:
             return "skipped:fb_disabled"
@@ -366,25 +285,12 @@ def _publish_to_platform(
         return "failed"
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Terminal summary printer (Task 3)
-# ─────────────────────────────────────────────────────────────────────────────
-
 def _print_publish_summary(
     post: dict,
     priority_score: int,
     results: dict[str, str],
 ) -> None:
-    """
-    Print a clean, structured publish summary.
 
-    FIXES:
-    1. Removed duplicate print() — logger.info() already writes to stdout
-       via the StreamHandler. print() + logger.info() caused every summary
-       to appear twice in the container log.
-    2. Added 'telegram' to the platform loop so all 4 platforms are shown.
-    3. Loop order: telegram → instagram → facebook → twitter (logical flow).
-    """
     ts    = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
     level = "HIGH" if priority_score >= PRIORITY_THRESHOLD_INSTAGRAM else "NORMAL"
     title = (post.get("title") or "")[:60]
@@ -412,22 +318,13 @@ def _print_publish_summary(
     lines.append(end)
 
     block = "\n".join(lines)
-    # FIX: use only logger.info — no print() to avoid duplicate output
+
     logger.info(block)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Main orchestration entry point
-# ─────────────────────────────────────────────────────────────────────────────
 
 class PublishPipeline:
-    """
-    The single, authoritative publish orchestrator.
 
-    Usage:
-        pipeline = PublishPipeline()
-        pipeline.publish(post, telegram_publisher)
-    """
 
     def __init__(self) -> None:
         # Import here to avoid circular imports
@@ -439,15 +336,7 @@ class PublishPipeline:
         post: dict,
         priority_score: Optional[int] = None,
     ) -> dict[str, str]:
-        """
-        Publish one article to the correct platforms based on priority.
 
-        This is the ONLY function that should call webhooks.
-        All other publish paths (instant_publisher, scheduler) must
-        route through here.
-
-        Returns dict of {platform: status}.
-        """
         if priority_score is None:
             priority_score = int(post.get("priority_score") or 0)
 
@@ -464,7 +353,7 @@ class PublishPipeline:
 
         results: dict[str, str] = {}
 
-        # ── Step 1: Telegram — always first ──────────────────────────────
+
         try:
             tg_sent = self._telegram.publish(post)
             results["telegram"] = "sent" if tg_sent else "failed"
@@ -472,20 +361,20 @@ class PublishPipeline:
             results["telegram"] = f"failed:{exc}"
             logger.error(f"❌ Telegram failed | article_id={article_id} | {exc}")
 
-        # ── Step 2: Social platforms by priority ──────────────────────────
+
         if is_high:
-            # HIGH PRIORITY: Instagram only
+
             results["instagram"] = _publish_to_platform(post, "instagram")
             results["facebook"]  = "skipped:high_priority_policy"
             results["twitter"]   = "skipped:high_priority_policy"
 
         else:
-            # NORMAL PRIORITY: Facebook + Twitter
+
             results["instagram"] = "skipped:normal_priority_policy"
             results["twitter"]   = _publish_to_platform(post, "twitter")
             results["facebook"]  = _publish_to_platform(post, "facebook")
 
-        # ── Step 3: Terminal summary ──────────────────────────────────────
+
         _print_publish_summary(post, priority_score, results)
 
         return results
@@ -495,8 +384,5 @@ class PublishPipeline:
         post: dict,
         platform: str,
     ) -> str:
-        """
-        Publish to exactly one platform.
-        Used by the retry worker for failed-platform recovery.
-        """
+  
         return _publish_to_platform(post, platform)

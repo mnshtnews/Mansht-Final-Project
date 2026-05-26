@@ -1,22 +1,4 @@
-"""
-services/scheduler.py — Publishing worker (queue drain).
 
-CHANGES FROM ORIGINAL
-────────────────────────────────────────────────────────────────────────────
-1. Routes ALL publishing through PublishPipeline — eliminates the split
-   between SocialDispatcher (old) and instant_publisher (old).
-   There is now exactly ONE path from queue row → webhook.
-
-2. Idempotency: PublishPipeline checks publish_log before every webhook.
-   Articles already published by instant_publish will have their platforms
-   already recorded in publish_log, so the scheduler's pass is a no-op.
-
-3. Skips re-publishing platforms already marked 'sent' in the queue row
-   (telegram_status, instagram_status, etc.) — second layer of protection.
-
-4. Handles the 'failed' platform retry: if a platform row shows 'failed'
-   from a prior instant_publish run, the scheduler will retry it.
-"""
 from __future__ import annotations
 
 import time
@@ -56,7 +38,7 @@ def _publish_one(post: dict) -> None:
                                                 "skipped:already_published")
 
     if tg_done and ig_done and fb_done and tw_done:
-        # Already fully published — just mark it and skip
+
         logger.debug(f"✅ All platforms done (worker skip) | id={post_id}")
         db_execute(
             """
@@ -68,8 +50,7 @@ def _publish_one(post: dict) -> None:
         )
         return
 
-    # Route through the unified pipeline
-    # PublishPipeline will skip platforms already in publish_log (idempotent)
+
     results = _pipeline.publish(post)
 
     tg_status = results.get("telegram",  post.get("telegram_status",  "pending"))

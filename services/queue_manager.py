@@ -1,17 +1,4 @@
-"""
-Priority-based publish queue manager.
 
-Queue ordering (highest priority first):
-  1. Overdue articles (age > MAX_QUEUE_AGE_HOURS) — oldest first
-  2. Pending articles — priority_score DESC → final_score DESC
-
-FIX 1: reorder_queue() now uses AGING_MULTIPLIER (0.12) instead of
-        MAX_QUEUE_AGE_HOURS (3.0) — the old value inflated aging scores
-        by 25x causing them to overwhelm keyword scores.
-
-FIX 2: fail_stale_processing() now returns the real DB rowcount via
-        db_execute(..., return_rowcount=True).
-"""
 from __future__ import annotations
 
 import logging
@@ -93,14 +80,7 @@ class QueueManager:
         )
 
     def reorder_queue(self) -> None:
-        """
-        Recalculate aging_score and final_score for all pending items.
 
-        FIX: uses AGING_MULTIPLIER (0.12) — NOT MAX_QUEUE_AGE_HOURS (3.0).
-             Old code: age_minutes * 3.0  → article at 60 min got +180 score
-             New code: age_minutes * 0.12 → article at 60 min gets +7.2 score
-             This keeps aging as a gentle tiebreaker, not a dominator.
-        """
         db_execute(
             """
             UPDATE news_queue
@@ -115,10 +95,7 @@ class QueueManager:
         )
 
     def get_next_post(self) -> Optional[dict]:
-        """
-        Atomically claim the next highest-priority pending article.
-        Uses SELECT FOR UPDATE SKIP LOCKED for safe concurrent access.
-        """
+
         conn = psycopg2.connect(os.environ["DATABASE_URL"])
         try:
             conn.autocommit = False
@@ -166,12 +143,7 @@ class QueueManager:
             conn.close()
 
     def fail_stale_processing(self, max_minutes: int = 10) -> int:
-        """
-        Reset articles stuck in 'processing' back to 'pending'.
 
-        FIX: returns the real DB rowcount instead of always returning 0.
-             Requires db_execute(..., return_rowcount=True) support in DB/db.py.
-        """
         recovered = db_execute(
             """
             UPDATE news_queue

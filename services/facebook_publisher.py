@@ -1,7 +1,4 @@
-"""
-Facebook publisher — posts via Make.com webhook.
-Includes smart rate limiting checked against social_rate_log.
-"""
+
 from __future__ import annotations
 
 import logging

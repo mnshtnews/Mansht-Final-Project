@@ -1,47 +1,4 @@
-"""
-scraper/save_news.py — Article processor.
 
-═══════════════════════════════════════════════════════════════════════════════
-FIXES APPLIED
-═══════════════════════════════════════════════════════════════════════════════
-
-ISSUE #1 — News image appears behind template (argument mismatch)
-──────────────────────────────────────────────────────────────────
-ROOT CAUSE — generate_image_fn called with `category` instead of `template_key`:
-
-  Original call:
-      image_url = generate_image_fn(
-          article["title"],
-          article.get("image"),
-          news_id,
-          article["url"],
-          category,           ← 5th arg was the ARABIC CATEGORY ("الاقتصاد")
-          confidence_val,
-          article.get("content"),
-          send_to_telegram=False,
-      )
-
-  _generate_image in app3.py receives this 5th arg as `template_key` and
-  passes it to generate_post_image(category=template_key).
-
-  So generate_post_image received category="الاقتصاد" (with ال prefix).
-  template_config.get("الاقتصاد") → None (keys are "اقتصاد" without ال).
-  Falls back to template_config.get("عام") → wrong image_box (46,188,1040,744).
-  "الاقتصاد" not in the old IF list → ELSE branch → template composited on top.
-
-FIX — Pass `template_key` (not `category`) as the 5th argument:
-  template_key is the exact key used in TEMPLATE_CONFIG ("اقتصاد", "سيارات",
-  "رياضة", "سياسة", "فن", "عام").  It always matches without any ال stripping.
-
-  With the updated config/settings.py (ISSUE #1 FIX), non-AI categories now
-  have specific template_keys ("اقتصاد", "سيارات", etc.) instead of "عام",
-  so the lookup always finds the correct template with correct image_box.
-
-  The three-layer fix for Issue #1:
-    Layer 1 (settings.py):   correct template_key per category
-    Layer 2 (save_news.py):  pass template_key (not category) to image gen
-    Layer 3 (composer.py):   auto-detect transparency — no name lists needed
-"""
 from __future__ import annotations
 
 import asyncio
@@ -71,19 +28,7 @@ def _now() -> datetime:
 def _resolve_category_and_template(
     article: dict,
 ) -> tuple[str, str, Optional[int], float]:
-    """
-    Returns (category_arabic, template_key, ai_label_or_None, confidence).
-
-    For AI-classified articles (UAE, Saudi, Egypt, etc.):
-      - Runs the classifier once.
-      - template_key = "سياسة" or "عام"
-      - category     = "سياسة" or "عام"
-
-    For fixed-template articles (Economy, Sports, Arts, etc.):
-      - template_key comes directly from settings.CATEGORIES[url]["template_key"]
-        which is now the exact TEMPLATE_CONFIG key (e.g. "اقتصاد", "سيارات").
-      - category = template_key for these (they are the same thing)
-    """
+    
     source_label = article.get("source_label", "عام")
 
     if article.get("use_ai", False):
@@ -96,9 +41,7 @@ def _resolve_category_and_template(
         return category, template_key, label, confidence
     else:
         template_key = article.get("template_key") or "عام"
-        # For non-AI categories, category == template_key (both are clean Arabic
-        # keys matching TEMPLATE_CONFIG exactly, e.g. "اقتصاد", "سيارات").
-        # Special cases for رياضة and فن which use their own templates.
+        
         category_map = {
             "رياضة":    "رياضة",
             "فن":       "فن",
@@ -107,7 +50,7 @@ def _resolve_category_and_template(
             "سيارات":   "سيارات",
             "تكنولوجيا": "تكنولوجيا",
             "ثقافة":    "ثقافة",
-            "عام":      source_label,  # عام uses source_label as display category
+            "عام":      source_label,  
         }
         category = category_map.get(template_key, template_key)
         return category, template_key, None, 1.0
@@ -121,7 +64,6 @@ def process_article(
     t_start = time.time()
 
     try:
-        # ── Deduplication ─────────────────────────────────────────────────
         exists = db_execute(
             "SELECT id FROM news WHERE url = %s OR title = %s LIMIT 1",
             (article["url"], article["title"]),
@@ -131,7 +73,6 @@ def process_article(
             logger.debug(f"⏭️  Duplicate skipped: {article['title'][:60]}")
             return
 
-        # ── Classification ────────────────────────────────────────────────
         category, template_key, ai_label, confidence_val = (
             _resolve_category_and_template(article)
         )
@@ -143,7 +84,6 @@ def process_article(
 
         processed_at = _now()
 
-        # ── Save to DB ────────────────────────────────────────────────────
         result = db_execute(
             """
             INSERT INTO news (
@@ -188,23 +128,17 @@ def process_article(
             f" | conf={confidence_val:.2f} | {article['title'][:60]}"
         )
 
-        # ── Priority scoring ──────────────────────────────────────────────
         priority_score = log_priority_decision(
             article["title"], article.get("content") or ""
         )
 
-        # ── Image generation ──────────────────────────────────────────────
-        # ISSUE #1 FIX: pass `template_key` as the 5th argument, NOT `category`.
-        # _generate_image in app3.py receives it as `template_key` and passes it
-        # to generate_post_image(category=template_key).
-        # template_key is the exact TEMPLATE_CONFIG key (e.g. "اقتصاد", "سيارات")
-        # and always matches without any string manipulation.
+        
         image_url = generate_image_fn(
             article["title"],
             article.get("image"),
             news_id,
             article["url"],
-            template_key,       # ← FIXED: was `category` (had ال prefix mismatch)
+            template_key,      
             confidence_val,
             article.get("content"),
             send_to_telegram=False,
@@ -216,7 +150,6 @@ def process_article(
                 f"continuing without generated image"
             )
 
-        # ── Final score components ────────────────────────────────────────
         scores    = calculate_final_score(
             article["title"],
             article.get("content") or "",
@@ -225,7 +158,6 @@ def process_article(
         queued_at  = _now()
         created_ts = time.time()
 
-        # ── Add to publish queue ──────────────────────────────────────────
         _queue.add_or_update_queue_item({
             "article_id":     news_id,
             "title":          article["title"],
@@ -243,7 +175,6 @@ def process_article(
             **scores,
         })
 
-        # Update image_url and meta on the queue row
         db_execute(
             """
             UPDATE news_queue
@@ -267,7 +198,6 @@ def process_article(
             (news_id,),
         )
 
-        # ── Confirmed training ────────────────────────────────────────────
         if ai_label is not None and confidence_val >= 0.65:
             db_execute(
                 """
@@ -278,7 +208,6 @@ def process_article(
                 (article["title"], ai_label, confidence_val),
             )
 
-        # ── Build in-memory queue_row ─────────────────────────────────────
         queue_row: dict = {
             "id":             None,
             "article_id":     news_id,
@@ -313,7 +242,6 @@ def process_article(
             f" | image={'✅' if image_url else '❌'}"
         )
 
-        # ── Dispatch: instant or enqueue ──────────────────────────────────
         if priority_score >= PRIORITY_THRESHOLD_INSTAGRAM:
             logger.info(
                 f"🚨 HIGH PRIORITY (score={priority_score}) — instant dispatch"
@@ -358,7 +286,6 @@ def save_news(
     template_config: dict,
     generate_image_fn: Callable,
 ) -> None:
-    """Legacy synchronous batch processor."""
     for item in news:
         item.setdefault("source_url",   "https://mnsht.net/category/1")
         item.setdefault("source_name",  "uae")

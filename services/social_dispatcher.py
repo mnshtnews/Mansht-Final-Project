@@ -1,39 +1,4 @@
-"""
-services/social_dispatcher.py — Intelligent multi-platform dispatcher.
 
-NEW PUBLISHING STRATEGY (Task 2)
-──────────────────────────────────────────────────────────────────────────────
-HIGH PRIORITY (priority_score >= PRIORITY_THRESHOLD_INSTAGRAM):
-  → Instagram ONLY
-  → Facebook: SKIPPED  (policy: high-priority news goes to Instagram only)
-  → Twitter:  SKIPPED  (policy: high-priority news goes to Instagram only)
-
-NORMAL PRIORITY (priority_score < PRIORITY_THRESHOLD_INSTAGRAM):
-  → Facebook + Twitter  (existing queue logic)
-  → Instagram: SKIPPED
-
-RATIONALE:
-  High-priority breaking news gets maximum visual impact on Instagram.
-  Facebook and Twitter handle the regular news flow.
-  This prevents the same article appearing on all three platforms at once,
-  which reduces audience fatigue and keeps each platform's feed distinct.
-
-BURST PROTECTION:
-  If N high-priority articles arrive within BURST_WINDOW_SECONDS,
-  the 3rd+ articles are staggered automatically to respect rate limits.
-
-RATE LIMITING:
-  All decisions query social_rate_log to respect per-platform cooldowns.
-
-TERMINAL NOTIFICATIONS (Task 3):
-  Every publish decision prints a structured, human-readable summary to
-  the terminal (via logger) showing:
-    - News title
-    - Priority level
-    - Which platforms were published to / skipped / failed
-    - Timestamp
-    - Reason for any skipped platforms
-"""
 from __future__ import annotations
 
 import logging
@@ -74,9 +39,6 @@ from utils.text_filter import sanitize_text
 logger = logging.getLogger(__name__)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Terminal notification helper  (Task 3)
-# ─────────────────────────────────────────────────────────────────────────────
 
 def _print_publish_summary(
     title: str,
@@ -84,19 +46,7 @@ def _print_publish_summary(
     results: dict[str, str],
     queue_id,
 ) -> None:
-    """
-    Print a clear, structured publish summary to the terminal.
-
-    Example output:
-    ╔══════════════════════════════════════════════════════════════╗
-    ║  📰 NEWS PUBLISHED  [2026-05-21 14:33:07 UTC]  id=42
-    ║  Title    : حاكم الشارقة يصدر مرسوما أميريا…
-    ║  Priority : HIGH (score=18)
-    ║  ✅ Instagram : sent
-    ║  ⏭  Facebook  : skipped — high-priority policy (Instagram only)
-    ║  ⏭  Twitter   : skipped — high-priority policy (Instagram only)
-    ╚══════════════════════════════════════════════════════════════╝
-    """
+    
     ts    = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
     level = "HIGH" if priority_score >= PRIORITY_THRESHOLD_INSTAGRAM else "NORMAL"
 
@@ -127,17 +77,12 @@ def _print_publish_summary(
         lines.append(_line(platform.capitalize(), status))
     lines.append(end)
 
-    # FIX: use only logger.info — print() + logger.info() caused duplicate output
     block = "\n".join(lines)
     logger.info(block)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Rate state
-# ─────────────────────────────────────────────────────────────────────────────
 
 class _RateState:
-    """Thread-safe in-process rate limiter with DB-backed precision."""
 
     def __init__(self, platform: str, min_interval: int, max_per_hour: int):
         self.platform     = platform
@@ -218,9 +163,6 @@ class _RateState:
                 logger.warning(f"Rate log write failed: {exc}")
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Platform publishers
-# ─────────────────────────────────────────────────────────────────────────────
 
 class _InstagramPublisher:
 
@@ -356,10 +298,6 @@ class _FacebookPublisher:
             return False
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Main Dispatcher
-# ─────────────────────────────────────────────────────────────────────────────
-
 class SocialDispatcher:
 
     def __init__(self):
@@ -390,21 +328,7 @@ class SocialDispatcher:
         post: dict,
         priority_score: Optional[int] = None,
     ) -> dict[str, str]:
-        """
-        Immediately dispatch to appropriate platforms based on NEW priority rules:
-
-        HIGH PRIORITY (score >= PRIORITY_THRESHOLD_INSTAGRAM):
-          → Instagram ONLY
-          → Facebook: skipped (policy)
-          → Twitter:  skipped (policy)
-
-        NORMAL PRIORITY (score < PRIORITY_THRESHOLD_INSTAGRAM):
-          → Facebook + Twitter
-          → Instagram: skipped
-
-        priority_score is optional — if not passed it reads from post automatically.
-        Returns dict of {platform: status}.
-        """
+       
         if priority_score is None:
             priority_score = int(post.get("priority_score") or 0)
 
@@ -437,15 +361,13 @@ class SocialDispatcher:
                     f"⏳ Instagram burst — queued +{delay:.0f}s | id={qid}"
                 )
 
-            # Facebook and Twitter explicitly skipped for high-priority
             results["facebook"] = "skipped — high-priority policy (Instagram only)"
             results["twitter"]  = "skipped — high-priority policy (Instagram only)"
 
         else:
-            # ── NORMAL PRIORITY: Facebook + Twitter ───────────────────────
             results["instagram"] = "skipped — normal-priority (Facebook+Twitter only)"
 
-            # Twitter
+            
             if priority_score >= PRIORITY_THRESHOLD_TWITTER:
                 allowed, wait = self._tw_state.can_send()
                 burst         = self._tw_state.burst_count_in_window()
@@ -464,7 +386,7 @@ class SocialDispatcher:
             else:
                 results["twitter"] = "skipped — below twitter threshold"
 
-            # Facebook
+            
             if priority_score >= PRIORITY_THRESHOLD_FACEBOOK:
                 allowed, wait = self._fb_state.can_send()
                 if allowed:
@@ -483,7 +405,6 @@ class SocialDispatcher:
             else:
                 results["facebook"] = "skipped — below facebook threshold"
 
-        # ── Terminal notification ──────────────────────────────────────────
         _print_publish_summary(title, priority_score, results, qid)
 
         return results
@@ -518,10 +439,7 @@ class SocialDispatcher:
         ).start()
 
     def process_pending_queue(self) -> int:
-        """
-        Drain the pending queue. Called periodically by the scheduler.
-        Returns number of articles dispatched.
-        """
+
         dispatched = 0
         with self._lock:
             items = list(self._pending)

@@ -1,30 +1,4 @@
-"""
-app3.py — Main entry point for the Mansht real-time news automation system.
 
-Architecture:
-  ─────────────────────────────────────────────────────────────────
-  asyncio event loop (main thread)
-    ├── category_worker(url_1)  ──┐
-    ├── category_worker(url_2)  ──┤  push to asyncio.Queue
-    ├── ...                     ──┤
-    └── category_worker(url_N)  ──┘
-                                    ↓
-                           article_consumer
-                             (process_article in ThreadPoolExecutor)
-
-  background threads (daemon)
-    ├── publishing_worker      — drains news_queue → PublishPipeline
-    └── recalculation_worker   — refreshes aging scores every 60s
-  ─────────────────────────────────────────────────────────────────
-
-PUBLISHING FLOW (SIMPLIFIED)
-  All articles → process_article()
-    ├─ HIGH priority  → instant_publish() → PublishPipeline → Instagram+Telegram
-    └─ NORMAL priority → QueueManager → publishing_worker → PublishPipeline → FB+TW+Telegram
-
-  PublishPipeline is the ONLY component that fires webhooks.
-  Idempotency is enforced via publish_log table (fingerprint per article+platform).
-"""
 from __future__ import annotations
 
 import asyncio
@@ -51,9 +25,6 @@ import requests as _requests
 
 load_dotenv()
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Environment validation
-# ─────────────────────────────────────────────────────────────────────────────
 
 _required = [
     "TOKEN", "CHAT_ID",
@@ -74,9 +45,6 @@ supabase  = create_client(str(SUPABASE_URL), str(SUPABASE_KEY))
 BASE_DIR  = os.path.dirname(os.path.abspath(__file__))
 TEMPLATES = os.path.join(BASE_DIR, "templates")
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Template config
-# ─────────────────────────────────────────────────────────────────────────────
 
 TEMPLATE_CONFIG = {
     "سيارات": {
@@ -132,7 +100,6 @@ TEMPLATE_CONFIG = {
     },
 }
 
-# Shared sync requests session (reused across image downloads)
 _sync_session = _requests.Session()
 _sync_session.headers.update(_SCRAPER_HEADERS)
 
@@ -142,7 +109,6 @@ def _generate_image(
     template_key, confidence, content,
     send_to_telegram=False,
 ):
-    """Sync image generation — called from ThreadPoolExecutor."""
     return generate_post_image(
         title=title,
         image_url=image_url,
@@ -160,9 +126,6 @@ def _generate_image(
     )
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Async consumer
-# ─────────────────────────────────────────────────────────────────────────────
 
 async def article_consumer(
     queue: asyncio.Queue,
@@ -182,9 +145,6 @@ async def article_consumer(
             queue.task_done()
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Main async entrypoint
-# ─────────────────────────────────────────────────────────────────────────────
 
 async def main() -> None:
     article_queue: asyncio.Queue = asyncio.Queue(maxsize=500)

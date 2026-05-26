@@ -1,52 +1,4 @@
-"""
-services/priority_telegram_publisher.py — Sends news to the Telegram channel.
 
-═══════════════════════════════════════════════════════════════════════════════
-FIXES APPLIED
-═══════════════════════════════════════════════════════════════════════════════
-
-ISSUE #3 — Different caption formats per platform
-──────────────────────────────────────────────────
-Required Telegram format:
-  [Image]
-
-  📰 Title
-
-  🏷 Category
-
-  Body text
-
-  ━━━━━━━━━━ (separator line)
-
-Required Facebook / Instagram format (handled in publish_pipeline.py):
-  [Image]
-
-  📰 Title
-
-  Body text
-
-  (NO category line at all)
-
-ROOT CAUSE — The caption format was identical across all platforms.
-  The Telegram _caption() method built the same string used for Facebook,
-  without any platform-aware distinction.
-
-FIX — _caption() now produces the Telegram-specific format:
-  1. Title line           → "📰 {title}"
-  2. Category line        → "🏷 {category}" — ONLY for Telegram, always present
-  3. Separator            → "━━━━━━━━━━"
-  4. Body text            → first 500 chars of content
-  5. Link                 → "🔗 {url}"
-
-  Facebook and Instagram captions are built separately in
-  publish_pipeline._build_payload() and contain NO category line.
-
-Other fixes (unchanged from previous refactor):
-  • _TOKEN and _CHAT_ID fall back to TOKEN / CHAT_ID env vars for
-    single-bot setups.
-  • 4-attempt exponential retry with tenacity.
-  • Caption truncated to Telegram's 1024-char limit.
-"""
 from __future__ import annotations
 
 import logging
@@ -67,7 +19,7 @@ from utils.text_filter import sanitize_text
 load_dotenv()
 logger = logging.getLogger(__name__)
 
-# Fall back to generic TOKEN / CHAT_ID for single-bot setups
+
 _TOKEN   = os.getenv("PRIORITY_TELEGRAM_BOT_TOKEN") or os.getenv("TOKEN")
 _CHAT_ID = os.getenv("PRIORITY_TELEGRAM_CHAT_ID")  or os.getenv("CHAT_ID")
 
@@ -86,25 +38,7 @@ class PriorityTelegramPublisher:
             )
 
     def _caption(self, post: dict) -> str:
-        """
-        Build the Telegram-specific caption.
-
-        ISSUE #3 FIX — Telegram format (different from Facebook/Instagram):
-
-          📰 {title}
-
-          🏷 {category}
-
-          ━━━━━━━━━━
-
-          {body text}
-
-          🔗 {url}
-
-        The category line is ONLY included in this Telegram caption.
-        Facebook and Instagram captions are built in publish_pipeline
-        and explicitly omit the category line.
-        """
+        
         title    = sanitize_text(post.get("title", ""))
         content  = sanitize_text((post.get("content") or "")[:500])
         category = post.get("source_label") or post.get("category") or ""
@@ -112,18 +46,18 @@ class PriorityTelegramPublisher:
 
         parts = [f"📰 {title}"]
 
-        # Category line — Telegram ONLY
+
         if category:
             parts.append(f"🏷 {category}")
 
-        # Separator before body
+
         parts.append(_SEPARATOR)
 
-        # Body text
+
         if content:
             parts.append(content)
 
-        # Source link
+
         if url:
             parts.append(f"🔗 {url}")
 
@@ -148,12 +82,7 @@ class PriorityTelegramPublisher:
         return resp
 
     def publish(self, post: dict) -> bool:
-        """
-        Send the article to the Telegram channel.
 
-        Uses sendPhoto when image_url is available, sendMessage otherwise.
-        Caption always includes the category line (Telegram-specific format).
-        """
         caption   = self._caption(post)
         image_url = post.get("image_url")
 

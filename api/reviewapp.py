@@ -23,9 +23,6 @@ app.add_middleware(
 LOCK_TIMEOUT_MINUTES = 10
 
 
-# =========================
-# REQUEST MODEL
-# =========================
 
 class ReviewRequest(BaseModel):
     id: int

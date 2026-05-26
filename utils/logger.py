@@ -1,9 +1,4 @@
-"""
-Structured logging setup.
-- Rotating file handler (10 MB × 5 backups)
-- Coloured console output
-- JSON-structured log level via LOG_LEVEL env var
-"""
+
 from __future__ import annotations
 
 import logging

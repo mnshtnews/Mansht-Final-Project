@@ -1,8 +1,4 @@
-"""
-AI-based importance scoring for the publish queue.
-Separate from the political classifier — this assigns a numeric boost
-based on named entities and article length.
-"""
+
 from __future__ import annotations
 
 IMPORTANT_ENTITIES = [

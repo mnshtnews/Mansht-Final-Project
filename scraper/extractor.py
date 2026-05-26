@@ -1,14 +1,4 @@
-"""
-Real-time async scraper — one independent worker per category URL.
 
-SCRAPE_ONLY_NEW = True  (الوضع الافتراضي)
-  أول دورة: warm-up — يحفظ كل الـ URLs الموجودة في _seen_urls
-             بدون معالجة ولا نشر.
-  من الدورة الثانية: يعالج فقط URLs جديدة لم تكن موجودة.
-
-SCRAPE_ONLY_NEW = False
-  يعامل كل URL غير موجود في DB كخبر جديد فوراً من أول دورة.
-"""
 from __future__ import annotations
 
 import asyncio
@@ -46,10 +36,6 @@ HEADERS  = {
 }
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Text helpers
-# ─────────────────────────────────────────────────────────────────────────────
-
 def clean_text(text) -> str:
     return unicodedata.normalize("NFKC", str(text or "")).strip()
 
@@ -66,10 +52,6 @@ def clean_image_url(src: Optional[str]) -> Optional[str]:
 def now_ts() -> datetime:
     return datetime.now(timezone.utc)
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# DB helpers
-# ─────────────────────────────────────────────────────────────────────────────
 
 def article_exists(url: str, title: Optional[str] = None) -> bool:
     if title:
@@ -126,9 +108,6 @@ def update_scraper_health(
         )
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Async HTTP helpers
-# ─────────────────────────────────────────────────────────────────────────────
 
 async def _fetch_html(
     session: aiohttp.ClientSession,
@@ -190,12 +169,8 @@ async def _fetch_article_content(
         return None
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Page parser
-# ─────────────────────────────────────────────────────────────────────────────
 
 def _parse_cards(html: str, category_url: str) -> list[dict]:
-    """Return list of raw article dicts from one category page."""
     soup  = BeautifulSoup(html, "lxml")
     cards = soup.find_all("div", class_="item-card")
     items = []
@@ -223,34 +198,21 @@ def _parse_cards(html: str, category_url: str) -> list[dict]:
     return items
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Per-category async worker
-# ─────────────────────────────────────────────────────────────────────────────
 
 async def category_worker(
     category_url: str,
     out_queue: asyncio.Queue,
     session: aiohttp.ClientSession,
 ) -> None:
-    """
-    Continuously poll one category page and push new articles to out_queue.
-
-    Warm-up behaviour (SCRAPE_ONLY_NEW=True):
-      - First iteration: collect all current URLs into _seen_urls → skip them.
-      - Second iteration onwards: only process URLs not in _seen_urls.
-
-    Normal behaviour (SCRAPE_ONLY_NEW=False):
-      - Process every URL not already in the DB from the very first iteration.
-    """
+    
     cfg          = CATEGORIES[category_url]
     cat_name     = cfg["name"]
     cat_label    = cfg["label"]
     template_key = cfg["template_key"]
     use_ai       = cfg["use_ai"]
 
-    # In-memory seen set — keyed on URL, survives across polling cycles
     _seen_urls: set[str] = set()
-    _is_warmup: bool     = SCRAPE_ONLY_NEW   # True only on the very first cycle
+    _is_warmup: bool     = SCRAPE_ONLY_NEW   
 
     if _is_warmup:
         logger.info(f"🔍 Warm-up mode: [{cat_label}] — first cycle will snapshot existing URLs only")
@@ -270,7 +232,6 @@ async def category_worker(
 
             raw_items = _parse_cards(html, category_url)
 
-            # Paginate if the first page returned fewer than 10 cards
             page = 2
             while page <= MAX_SCRAPE_PAGES and len(raw_items) < 10:
                 page_html = await _fetch_html(session, f"{category_url}/page/{page}")
@@ -278,7 +239,6 @@ async def category_worker(
                     raw_items += _parse_cards(page_html, category_url)
                 page += 1
 
-            # ── Warm-up cycle: snapshot URLs and exit immediately ──────────
             if _is_warmup:
                 for item in raw_items:
                     _seen_urls.add(item["url"])
@@ -294,21 +254,17 @@ async def category_worker(
                 await asyncio.sleep(sleep_for)
                 continue
 
-            # ── Normal cycles: process only genuinely new articles ─────────
             new_count = 0
             for item in raw_items:
                 url = item["url"]
 
-                # Skip if already seen this session
                 if url in _seen_urls:
                     continue
 
-                # Skip if already in DB (handles restart recovery)
                 if article_exists(url, item["title"]):
-                    _seen_urls.add(url)   # don't query DB again next cycle
+                    _seen_urls.add(url)   
                     continue
 
-                # Mark as seen before processing (prevents double-queue on slow runs)
                 _seen_urls.add(url)
 
                 scraped_at = now_ts()
@@ -357,12 +313,9 @@ async def category_worker(
         await asyncio.sleep(sleep_for)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Synchronous compatibility shim
-# ─────────────────────────────────────────────────────────────────────────────
 
 def get_html(page: int = 1) -> str:
-    """Legacy sync wrapper — fetches the UAE category homepage."""
+
     import requests
     url = BASE_URL if page == 1 else f"{BASE_URL}/page/{page}"
     for attempt in range(1, SCRAPE_MAX_RETRIES + 1):

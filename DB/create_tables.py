@@ -1,9 +1,4 @@
-"""
-DB/create_tables.py — Creates all required tables and indexes.
-Run once on a fresh database, or run idempotently.
 
-ADDED: publish_log table for PublishPipeline idempotency.
-"""
 import sys
 import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -13,7 +8,6 @@ conn = get_conn()
 conn.autocommit = True
 cur  = conn.cursor()
 
-# ── news ──────────────────────────────────────────────────────────────────────
 cur.execute("""
 CREATE TABLE IF NOT EXISTS news (
     id                  SERIAL PRIMARY KEY,
@@ -39,7 +33,6 @@ CREATE TABLE IF NOT EXISTS news (
 );
 """)
 
-# ── confirmed_training ────────────────────────────────────────────────────────
 cur.execute("""
 CREATE TABLE IF NOT EXISTS confirmed_training (
     id          SERIAL PRIMARY KEY,
@@ -51,7 +44,6 @@ CREATE TABLE IF NOT EXISTS confirmed_training (
 );
 """)
 
-# ── news_queue ────────────────────────────────────────────────────────────────
 cur.execute("""
 CREATE TABLE IF NOT EXISTS news_queue (
     id           SERIAL PRIMARY KEY,
@@ -90,7 +82,6 @@ CREATE TABLE IF NOT EXISTS news_queue (
 );
 """)
 
-# ── publish_log (NEW) ─────────────────────────────────────────────────────────
 cur.execute("""
 CREATE TABLE IF NOT EXISTS publish_log (
     id          SERIAL PRIMARY KEY,
@@ -105,7 +96,6 @@ CREATE TABLE IF NOT EXISTS publish_log (
 );
 """)
 
-# ── social_rate_log ───────────────────────────────────────────────────────────
 cur.execute("""
 CREATE TABLE IF NOT EXISTS social_rate_log (
     id          SERIAL PRIMARY KEY,
@@ -116,7 +106,6 @@ CREATE TABLE IF NOT EXISTS social_rate_log (
 );
 """)
 
-# ── scraper_health ────────────────────────────────────────────────────────────
 cur.execute("""
 CREATE TABLE IF NOT EXISTS scraper_health (
     id              SERIAL PRIMARY KEY,
@@ -131,7 +120,6 @@ CREATE TABLE IF NOT EXISTS scraper_health (
 );
 """)
 
-# ── indexes ───────────────────────────────────────────────────────────────────
 indexes = [
     "CREATE INDEX IF NOT EXISTS idx_news_created_at      ON news(created_at DESC);",
     "CREATE INDEX IF NOT EXISTS idx_news_category        ON news(category);",
@@ -143,7 +131,6 @@ indexes = [
     "CREATE INDEX IF NOT EXISTS idx_queue_created_at     ON news_queue(created_at);",
     "CREATE INDEX IF NOT EXISTS idx_rate_log_platform    ON social_rate_log(platform, sent_at DESC);",
     "CREATE INDEX IF NOT EXISTS idx_scraper_health_url   ON scraper_health(category_url);",
-    # New publish_log indexes
     "CREATE INDEX IF NOT EXISTS idx_publish_log_article  ON publish_log(article_id, platform, status);",
     "CREATE UNIQUE INDEX IF NOT EXISTS idx_publish_log_fp ON publish_log(fingerprint);",
 ]
