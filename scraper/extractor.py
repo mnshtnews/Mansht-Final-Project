@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 import asyncio
@@ -169,6 +168,31 @@ async def _fetch_article_content(
         return None
 
 
+async def _fetch_article_og_image(
+    session: aiohttp.ClientSession,
+    url: str,
+) -> Optional[str]:
+    """جلب صورة og:image من صفحة الخبر كـ fallback لو صورة الكارد مش شغّالة."""
+    html = await _fetch_html(session, url)
+    if not html:
+        return None
+    try:
+        soup = BeautifulSoup(html, "lxml")
+        og   = soup.find("meta", property="og:image")
+        if og:
+            src = og.get("content")
+            if src and not str(src).startswith("data:"):
+                return clean_image_url(str(src))
+        # fallback: أول صورة كبيرة في المقال
+        for img in soup.select("div.paragraph-list img, article img"):
+            _s = img.get("data-src") or img.get("data-lazy-src") or img.get("src")
+            if _s and not str(_s).startswith("data:"):
+                return clean_image_url(str(_s))
+    except Exception as exc:
+        logger.warning(f"⚠️ OG image parse error for {url}: {exc}")
+    return None
+
+
 
 def _parse_cards(html: str, category_url: str) -> list[dict]:
     soup  = BeautifulSoup(html, "lxml")
@@ -187,8 +211,17 @@ def _parse_cards(html: str, category_url: str) -> list[dict]:
             img_tag = card.find("img")
             raw_src: Optional[str] = None
             if img_tag:
-                _s = img_tag.get("data-src") or img_tag.get("src")
+                _s = (
+                    img_tag.get("data-src")
+                    or img_tag.get("data-lazy-src")
+                    or img_tag.get("data-original")
+                    or img_tag.get("data-url")
+                    or img_tag.get("src")
+                )
                 raw_src = str(_s) if _s else None
+                # تجاهل base64 placeholders
+                if raw_src and raw_src.startswith("data:"):
+                    raw_src = None
             image = clean_image_url(raw_src)
             if image and "logo" in image.lower():
                 image = None
@@ -270,10 +303,17 @@ async def category_worker(
                 scraped_at = now_ts()
                 content    = await _fetch_article_content(session, url)
 
+                # لو الصورة مش موجودة في الكارد، جرب تجيبها من الصفحة نفسها
+                article_image = item["image"]
+                if not article_image:
+                    article_image = await _fetch_article_og_image(session, url)
+                    if article_image:
+                        logger.info(f"🖼️  OG image fallback used for: {item['title'][:60]}")
+
                 article = {
                     "title":        item["title"],
                     "url":          url,
-                    "image":        item["image"],
+                    "image":        article_image,
                     "content":      content,
                     "source_url":   category_url,
                     "source_name":  cat_name,
