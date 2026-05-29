@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 import io
@@ -42,7 +41,7 @@ _RETRY_BASE_DELAY = 1.5
 _DOWNLOAD_TIMEOUT = 20   
 
 
-_FALLBACK_BOX_COLOR = (30, 30, 30, 255)
+_FALLBACK_BOX_COLOR = (30, 30, 50, 255)   # داكن مع لمسة زرقاء — واضح إنه fallback مقصود
 
 
 _TRANSPARENT_THRESHOLD = 0.50
@@ -182,6 +181,13 @@ def _download_news_image(
                 )
 
             img = Image.open(BytesIO(resp.content)).convert("RGBA")
+
+            # تجاهل الصور الصغيرة جداً — غالباً placeholders أو tracking pixels
+            if img.size[0] < 50 or img.size[1] < 50:
+                raise ValueError(
+                    f"Image too small {img.size} — likely a placeholder/tracking pixel"
+                )
+
             logger.info(
                 f"✅ Image downloaded | id={news_id} | "
                 f"attempt={attempt}/{_MAX_RETRIES} | size={img.size}"
